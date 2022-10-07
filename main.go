@@ -112,14 +112,27 @@ func (s *Server) handle(conn net.Conn) error {
 	defer conn.Close()
 
 	bufConn := bufio.NewReader(conn)
-	// negotiate first stage
-	// client provides methods, server choose one method and return to client
+
 	err := s.authenticate(conn, bufConn)
 	if err != nil {
 		return err
 	}
-	// netotiate second stage
-	// sub-negotiation
+
+	request, err := NewRequest(bufConn)
+	if err != nil {
+		if err == unrecognizedAddrType {
+			if err := sendReply(conn, uint8(addressNotSupported), nil); err != nil {
+				return fmt.Errorf("Failed to send reply: %v", err)
+			}
+		}
+		return fmt.Errorf("Failed to read destination address: %v", err)
+	}
+
+	// Process the client request
+	if err := s.handleRequest(request, conn); err != nil {
+		err = fmt.Errorf("Failed to handle request: %v", err)
+		return err
+	}
 
 	return nil
 }

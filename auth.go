@@ -29,6 +29,8 @@ func NewProtocolErr(msg string) error {
 }
 
 func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) error {
+	// negotiate first stage
+	// client provides methods, server choose one method and return to client
 	header := []byte{0, 0}
 	if _, err := io.ReadAtLeast(bufConn, header, 2); err != nil {
 		return err
@@ -50,5 +52,9 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) error {
 	if err != nil {
 		return err
 	}
+
+	// netotiate second stage
+	// sub-negotiation
 	return authenticator.Authenticate(conn, bufConn)
 }
+
