@@ -37,7 +37,10 @@ type ServerConfig struct {
 }
 
 func main() {
-	s, err := NewServer(ServerConfig{})
+	s, err := NewServer(ServerConfig{
+		ip: "0.0.0.0",
+		p:  defaultPort,
+	})
 	if err != nil {
 		log.Fatal("listen failed", err)
 	}
@@ -64,7 +67,10 @@ func (ac *authCollector) selectMethod(methods []byte) (auth.AuthMethod, auth.Aut
 }
 
 func newAuthCollector() authCollector {
-	return authCollector{authMap: make(map[auth.AuthMethod]auth.Authenticator)}
+	ac := authCollector{authMap: make(map[auth.AuthMethod]auth.Authenticator)}
+	passAuth, _ := auth.NewAuthenticator(auth.AuthMethodUsernamePassword)
+	ac.authMap[auth.AuthMethodUsernamePassword] = passAuth
+	return ac
 }
 
 type Server struct {
@@ -105,7 +111,6 @@ func (s *Server) Serve() error {
 		}
 		go s.handle(conn)
 	}
-	return nil
 }
 
 func (s *Server) handle(conn net.Conn) error {
@@ -140,6 +145,7 @@ func (s *Server) handle(conn net.Conn) error {
 // todo 配置初始化
 func NewServer(cfg ServerConfig) (*Server, error) {
 	return &Server{
-		ac: newAuthCollector(),
+		cfg: cfg,
+		ac:  newAuthCollector(),
 	}, nil
 }

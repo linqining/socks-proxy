@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -11,6 +14,12 @@ const (
 	_
 	fqdnAddress
 	ipv6Address
+)
+
+const (
+	ConnectCommand uint8 = 1 + iota
+	BindCommand
+	AssociateCommand
 )
 
 var (
@@ -21,6 +30,13 @@ type AddrSpec struct {
 	FQDN string
 	IP   net.IP
 	Port int
+}
+
+func (a AddrSpec) Address() string {
+	if 0 != len(a.IP) {
+		return net.JoinHostPort(a.IP.String(), strconv.Itoa(a.Port))
+	}
+	return net.JoinHostPort(a.FQDN, strconv.Itoa(a.Port))
 }
 
 // A Request represents request received by a server
@@ -40,9 +56,54 @@ type Request struct {
 	bufConn      io.Reader
 }
 
-func (s *Server) handleRequest(req *Request, bufConn io.Reader) error {
+type DNSResolver struct{}
 
-	return nil
+func (d DNSResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	addr, err := net.ResolveIPAddr("ip", name)
+	if err != nil {
+		return ctx, nil, err
+	}
+	return ctx, addr.IP, err
+}
+
+func (s *Server) handleRequest(req *Request, conn net.Conn) error {
+	ctx := context.Background()
+
+	// Resolve the address if we have a FQDN
+	dest := req.DestAddr
+	if dest.FQDN != "" {
+		resolver := &DNSResolver{}
+		ctx_, addr, err := resolver.Resolve(ctx, dest.FQDN)
+		if err != nil {
+			if err := sendReply(conn, uint8(hostUnreachable), nil); err != nil {
+				return fmt.Errorf("Failed to send reply: %v", err)
+			}
+			return fmt.Errorf("Failed to resolve destination '%v': %v", dest.FQDN, err)
+		}
+		ctx = ctx_
+		dest.IP = addr
+	}
+
+	//// Apply any address rewrites
+	//req.realDestAddr = req.DestAddr
+	//if s.config.Rewriter != nil {
+	//	ctx, req.realDestAddr = s.config.Rewriter.Rewrite(ctx, req)
+	//}
+
+	// Switch on the command
+	switch req.Command {
+	case ConnectCommand:
+		return s.handleConnect(ctx, conn, req)
+	case BindCommand:
+		return s.handleBind(ctx, conn, req)
+	case AssociateCommand:
+		return s.handleAssociate(ctx, conn, req)
+	default:
+		if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+			return fmt.Errorf("Failed to send reply: %v", err)
+		}
+		return fmt.Errorf("Unsupported command: %v", req.Command)
+	}
 }
 
 // NewRequest creates a new Request from the tcp connection
@@ -167,4 +228,73 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 	// Send the message
 	_, err := w.Write(msg)
 	return err
+}
+
+// handleConnect is used to handle a connect command
+func (s *Server) handleConnect(ctx context.Context, conn net.Conn, req *Request) error {
+
+	dial := func(ctx context.Context, net_, addr string) (net.Conn, error) {
+		return net.Dial(net_, addr)
+	}
+	target, err := dial(ctx, "tcp", req.DestAddr.Address())
+	if err != nil {
+		msg := err.Error()
+		resp := hostUnreachable
+		if strings.Contains(msg, "refused") {
+			resp = connectionRefused
+		} else if strings.Contains(msg, "network is unreachable") {
+			resp = networkUnreachable
+		}
+		if err := sendReply(conn, uint8(resp), nil); err != nil {
+			return fmt.Errorf("Failed to send reply: %v", err)
+		}
+		return fmt.Errorf("Connect to %v failed: %v", req.DestAddr, err)
+	}
+	defer target.Close()
+
+	// Send success
+	local := target.LocalAddr().(*net.TCPAddr)
+	bind := AddrSpec{IP: local.IP, Port: local.Port}
+	if err := sendReply(conn, uint8(succeeded), &bind); err != nil {
+		return fmt.Errorf("Failed to send reply: %v", err)
+	}
+
+	// Start proxying
+	errCh := make(chan error, 2)
+	go proxy(target, req.bufConn, errCh)
+	go proxy(conn, target, errCh)
+
+	// Wait
+	for i := 0; i < 2; i++ {
+		e := <-errCh
+		if e != nil {
+			// return from this function closes target (and conn).
+			return e
+		}
+	}
+	return nil
+}
+
+func proxy(dst io.Writer, src io.Reader, errCh chan error) {
+	_, err := io.Copy(dst, src)
+	errCh <- err
+}
+
+// handleBind is used to handle a connect command
+func (s *Server) handleBind(ctx context.Context, conn net.Conn, req *Request) error {
+
+	// TODO: Support bind
+	if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+		return fmt.Errorf("Failed to send reply: %v", err)
+	}
+	return nil
+}
+
+// handleAssociate is used to handle a connect command
+func (s *Server) handleAssociate(ctx context.Context, conn net.Conn, req *Request) error {
+	// TODO: Support associate
+	if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+		return fmt.Errorf("Failed to send reply: %v", err)
+	}
+	return nil
 }
