@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"log"
-	"tcpproxy/auth"
+	"socks-proxy/auth"
 	"testing"
 )
 

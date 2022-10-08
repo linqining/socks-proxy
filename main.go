@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"tcpproxy/auth"
+	"socks-proxy/auth"
 )
 
 type port uint16
@@ -24,12 +24,6 @@ https://www.rfc-editor.org/rfc/rfc1928
 
 3. 发送命令connect,bind,associate
 */
-
-type negotiation struct {
-	version    int
-	numMethods int
-	methods    []int
-}
 
 type ServerConfig struct {
 	ip string
@@ -142,7 +136,6 @@ func (s *Server) handle(conn net.Conn) error {
 	return nil
 }
 
-// todo 配置初始化
 func NewServer(cfg ServerConfig) (*Server, error) {
 	return &Server{
 		cfg: cfg,
