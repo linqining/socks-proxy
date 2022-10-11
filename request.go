@@ -303,12 +303,21 @@ func (s *Server) handleBind(ctx context.Context, conn net.Conn, req *Request) er
 
 	conChan := make(chan net.Conn)
 	go func() {
-		bconn, err := bl.Accept()
-		if err != nil {
-			conChan <- nil
-			return
+		for {
+			bconn, err := bl.Accept()
+			// should reject connection if not from de ip bind command specify
+			if string(bconn.RemoteAddr().(*net.TCPAddr).IP) != string(req.DestAddr.IP) {
+				bconn.Close()
+				bconn = nil
+				continue
+			}
+
+			if err != nil {
+				conChan <- nil
+				return
+			}
+			conChan <- bconn
 		}
-		conChan <- bconn
 	}()
 	timeOut := false
 	var bconn net.Conn
