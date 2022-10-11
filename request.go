@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -83,12 +85,6 @@ func (s *Server) handleRequest(req *Request, conn net.Conn) error {
 		ctx = ctx_
 		dest.IP = addr
 	}
-
-	//// Apply any address rewrites
-	//req.realDestAddr = req.DestAddr
-	//if s.config.Rewriter != nil {
-	//	ctx, req.realDestAddr = s.config.Rewriter.Rewrite(ctx, req)
-	//}
 
 	// Switch on the command
 	switch req.Command {
@@ -282,12 +278,83 @@ func proxy(dst io.Writer, src io.Reader, errCh chan error) {
 
 // handleBind is used to handle a connect command
 func (s *Server) handleBind(ctx context.Context, conn net.Conn, req *Request) error {
+	publicIP := net.ParseIP(s.cfg.ip)
+	if publicIP == nil || publicIP.IsPrivate() {
+		return errors.New("invalid config,not a valid public ip")
+	}
 
-	// TODO: Support bind
+	bl, err := listenerForBind()
+	if err != nil {
+		if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+			return fmt.Errorf("Failed to send reply: %v", err)
+		}
+		return err
+	}
+	defer bl.Close()
+
+	local := bl.Addr().(*net.TCPAddr)
+	bind := AddrSpec{IP: publicIP, Port: local.Port}
+	if err := sendReply(conn, uint8(succeeded), &bind); err != nil {
+		return fmt.Errorf("Failed to send reply: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conChan := make(chan net.Conn)
+	go func() {
+		bconn, err := bl.Accept()
+		if err != nil {
+			conChan <- nil
+			return
+		}
+		conChan <- bconn
+	}()
+	timeOut := false
+	var bconn net.Conn
+	select {
+	case <-ctx.Done():
+		timeOut = true
+	case bconn = <-conChan:
+	}
+
+	if timeOut {
+		if err := sendReply(conn, uint8(TTLExpired), nil); err != nil {
+			return fmt.Errorf("Failed to send reply: %v", err)
+		}
+		return errors.New("no connection is established")
+	}
+	if bconn != nil {
+		local := bconn.RemoteAddr().(*net.TCPAddr)
+		bind := AddrSpec{IP: local.IP, Port: local.Port}
+		if err := sendReply(conn, uint8(succeeded), &bind); err != nil {
+			return fmt.Errorf("Failed to send reply: %v", err)
+		}
+	}
+
+	// Start proxying
+	errCh := make(chan error, 2)
+	go proxy(bconn, conn, errCh)
+	go proxy(conn, bconn, errCh)
+
+	// Wait
+	for i := 0; i < 2; i++ {
+		e := <-errCh
+		if e != nil {
+			// return from this function closes target (and conn).
+			return e
+		}
+	}
+
 	if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
 		return fmt.Errorf("Failed to send reply: %v", err)
 	}
 	return nil
+}
+
+// see https://levelup.gitconnected.com/listening-to-random-available-port-in-go-3541dddbb0c5?gi=aec26305b732
+func listenerForBind() (net.Listener, error) {
+	return net.Listen("tcp", ":0")
 }
 
 // handleAssociate is used to handle a connect command

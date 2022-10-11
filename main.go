@@ -26,8 +26,8 @@ https://www.rfc-editor.org/rfc/rfc1928
 */
 
 type ServerConfig struct {
-	ip string
-	p  port
+	ip string // publicIP
+	p  port   // socks server listen port
 }
 
 func main() {
