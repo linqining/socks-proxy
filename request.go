@@ -277,6 +277,10 @@ func proxy(dst io.Writer, src io.Reader, errCh chan error) {
 }
 
 // handleBind is used to handle a connect command
+// bind expected that client have use connect to establish a primary connection
+// but it's not properly to record the connection's ip and port  and verify bind command have primary connection first
+// you just can distinguish which connection is the primary connection for bind for there may be other connections serving
+// other users when clients using a same router, in which case all have the same ip
 func (s *Server) handleBind(ctx context.Context, conn net.Conn, req *Request) error {
 	publicIP := net.ParseIP(s.cfg.ip)
 	if publicIP == nil || publicIP.IsPrivate() {
