@@ -24,6 +24,8 @@ const (
 	AssociateCommand
 )
 
+const udpBufSize = 64 * 1024
+
 var (
 	unrecognizedAddrType = fmt.Errorf("Unrecognized address type")
 )
@@ -282,12 +284,13 @@ func proxy(dst io.Writer, src io.Reader, errCh chan error) {
 // you just can distinguish which connection is the primary connection for bind for there may be other connections serving
 // other users when clients using a same router, in which case all have the same ip
 func (s *Server) handleBind(ctx context.Context, conn net.Conn, req *Request) error {
+	// todo do it when initialization
 	publicIP := net.ParseIP(s.cfg.ip)
 	if publicIP == nil || publicIP.IsPrivate() {
 		return errors.New("invalid config,not a valid public ip")
 	}
 
-	bl, err := listenerForBind()
+	bl, err := tcpListenerForBind()
 	if err != nil {
 		if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
 			return fmt.Errorf("Failed to send reply: %v", err)
@@ -366,15 +369,65 @@ func (s *Server) handleBind(ctx context.Context, conn net.Conn, req *Request) er
 }
 
 // see https://levelup.gitconnected.com/listening-to-random-available-port-in-go-3541dddbb0c5?gi=aec26305b732
-func listenerForBind() (net.Listener, error) {
+func tcpListenerForBind() (net.Listener, error) {
 	return net.Listen("tcp", ":0")
+}
+
+func udpListenerForBind() (net.PacketConn, error) {
+	return net.ListenPacket("udp", ":0")
 }
 
 // handleAssociate is used to handle a connect command
 func (s *Server) handleAssociate(ctx context.Context, conn net.Conn, req *Request) error {
-	// TODO: Support associate
-	if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+	// todo do it when initialization
+	publicIP := net.ParseIP(s.cfg.ip)
+	if publicIP == nil || publicIP.IsPrivate() {
+		return errors.New("invalid config,not a valid public ip")
+	}
+	localUdpConn, err := udpListenerForBind()
+	if err != nil {
+		if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+			return fmt.Errorf("Failed to send reply: %v", err)
+		}
+		return err
+	}
+
+	defer localUdpConn.Close()
+
+	laddr := localUdpConn.(*net.UDPConn).LocalAddr().(*net.UDPAddr)
+
+	bind := AddrSpec{IP: publicIP, Port: laddr.Port}
+	if err := sendReply(conn, uint8(succeeded), &bind); err != nil {
 		return fmt.Errorf("Failed to send reply: %v", err)
 	}
-	return nil
+	buf := make([]byte, udpBufSize)
+
+	for {
+		n, addr, err := localUdpConn.ReadFrom(buf)
+		uaddr := addr.(*net.UDPAddr)
+		if err != nil {
+			continue
+		}
+		if uaddr.IP.String() != req.RemoteAddr.IP.String() || uaddr.IP.String() != req.DestAddr.IP.String() {
+			// handle packets except from the IP handle associate specified
+			continue
+		}
+		if uaddr.IP.String() == req.RemoteAddr.IP.String() {
+			_, err = localUdpConn.WriteTo(buf[:n], &net.UDPAddr{IP: req.DestAddr.IP, Port: req.DestAddr.Port})
+			if err != nil {
+				if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+					return fmt.Errorf("Failed to send reply: %v", err)
+				}
+				return err
+			}
+		} else {
+			_, err = localUdpConn.WriteTo(buf[:n], &net.UDPAddr{IP: req.RemoteAddr.IP, Port: req.RemoteAddr.Port})
+			if err != nil {
+				continue
+			}
+		}
+	}
+	//if err := sendReply(conn, uint8(commandNotSupported), nil); err != nil {
+	//	return fmt.Errorf("Failed to send reply: %v", err)
+	//}
 }

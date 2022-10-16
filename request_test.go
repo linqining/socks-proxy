@@ -6,7 +6,7 @@ import (
 )
 
 func Test_listenerForBind(t *testing.T) {
-	ln, err := listenerForBind()
+	ln, err := tcpListenerForBind()
 	t.Log(err)
 	spec := ln.Addr().(*net.TCPAddr)
 	t.Log(spec.IP)
